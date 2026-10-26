@@ -154,7 +154,7 @@ public struct QPACKDecoder {
         guard prefix.requiredInsertCount <= self.dynamicTable.insertCount else {
             return .missingInsertCount
         }
-        do {
+        do throws(QPACKDecoderError) {
             var fields = [HTTPField]()
             fields.reserveCapacity(lines.count)
             var remaining = maximumDecodedBytes ?? Int.max

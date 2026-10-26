@@ -763,9 +763,13 @@ public struct HTTP3InboundMemoryConfiguration: Sendable {
     }
 
     /// Models array/string storage; allocator padding and object headers are outside this payload model.
-    func requiredStorageBytes(maximumDecodedFieldSectionBytes: Int) -> Int {
+    func requiredStorageBytes(
+        maximumDecodedFieldSectionBytes: Int,
+        maximumBufferedPayloadBytes: Int? = nil
+    ) -> Int {
         precondition(maximumDecodedFieldSectionBytes >= 0)
-        let (inputSize, inputOverflow) = max(self.maximumEncodedFieldSectionBytes, 1024).addingReportingOverflow(self.maximumBytesPerRead)
+        let payloadLimit = maximumBufferedPayloadBytes ?? self.maximumEncodedFieldSectionBytes
+        let (inputSize, inputOverflow) = max(payloadLimit, 1024).addingReportingOverflow(self.maximumBytesPerRead)
         let (framedSize, framingOverflow) = inputSize.addingReportingOverflow(16)
         precondition(!inputOverflow && !framingOverflow)
         var capacity = 1

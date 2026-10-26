@@ -673,9 +673,16 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         var logger = self.logger
         logger[metadataKey: LoggingKeys.h3StreamType] = "\(streamType)"
         logger[metadataKey: LoggingKeys.quicStreamID] = "\(streamID)"
+        let encodedLimit = self.inboundMemory.map {
+            streamType == .control ? min($0.maximumEncodedFieldSectionBytes, 1024) : $0.maximumEncodedFieldSectionBytes
+        }
+        let decodedLimit = self.inboundMemory.map {
+            streamType == .control ? 0 : (self.maximumDecodedFieldSectionBytes ?? $0.maximumEncodedFieldSectionBytes)
+        }
         let reservation = try self.inboundMemory.map { memory in
             try memory.makeStorageReservation(memory.requiredStorageBytes(
-                maximumDecodedFieldSectionBytes: self.maximumDecodedFieldSectionBytes ?? memory.maximumEncodedFieldSectionBytes
+                maximumDecodedFieldSectionBytes: decodedLimit ?? 0,
+                maximumBufferedPayloadBytes: encodedLimit
             ))
         }
         let streamHandler = StreamHandler(
@@ -683,10 +690,8 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
                 streamType: streamType,
                 incoming: incoming,
                 preferHuffmanEncoding: self.preferHuffmanEncoding,
-                maximumEncodedFieldSectionBytes: self.inboundMemory?.maximumEncodedFieldSectionBytes,
-                maximumDecodedFieldSectionBytes: self.inboundMemory.map {
-                    self.maximumDecodedFieldSectionBytes ?? $0.maximumEncodedFieldSectionBytes
-                }
+                maximumEncodedFieldSectionBytes: encodedLimit,
+                maximumDecodedFieldSectionBytes: decodedLimit
             ),
             streamID: streamID,
             streamType: streamType,

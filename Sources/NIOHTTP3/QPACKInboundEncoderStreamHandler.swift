@@ -46,7 +46,8 @@ final class QPACKInboundEncoderStreamHandler<Delegate: QPACKInboundEncoderStream
     init(delegate: consuming Delegate, inboundMemory: HTTP3InboundMemoryConfiguration?) throws {
         self.storageReservation = try inboundMemory.map { memory in
             try memory.makeStorageReservation(memory.requiredStorageBytes(
-                maximumDecodedFieldSectionBytes: memory.maximumEncodedFieldSectionBytes
+                maximumDecodedFieldSectionBytes: 0,
+                maximumBufferedPayloadBytes: 16
             ))
         }
         self.inboundMemory = inboundMemory
