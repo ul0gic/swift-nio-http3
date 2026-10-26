@@ -85,6 +85,14 @@ extension HTTP3Error {
                 errorCode: .qpackDecompressionFailed,
                 location: location
             )
+        case .decodeError(.fieldSectionTooLarge):
+            self.init(
+                code: .invalidFramePayload,
+                message: "Decoded field section exceeds configured limit",
+                cause: error,
+                errorCode: .excessiveLoad,
+                location: location
+            )
         case .decodeError(.invalidHeaderName):
             // The field section decoded fine, but a field name isn't valid in HTTP/3: a malformed message.
             self.init(

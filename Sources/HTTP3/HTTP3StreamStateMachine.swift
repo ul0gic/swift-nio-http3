@@ -467,9 +467,14 @@ public struct HTTP3StreamStateMachine: ~Copyable {
     public init(
         streamType: HTTP3StreamType.Framed,
         incoming: Bool,
-        preferHuffmanEncoding: Bool
+        preferHuffmanEncoding: Bool,
+        maximumEncodedFieldSectionBytes: Int? = nil,
+        maximumDecodedFieldSectionBytes: Int? = nil
     ) {
-        let frameDecoder = HTTP3FrameDecoderStateMachine()
+        let frameDecoder = HTTP3FrameDecoderStateMachine(
+            maximumEncodedFieldSectionBytes: maximumEncodedFieldSectionBytes,
+            maximumDecodedFieldSectionBytes: maximumDecodedFieldSectionBytes
+        )
         let frameValidator = HTTP3FrameValidator(streamType: streamType, incoming: incoming)
         let readState = ReadState(decoder: frameDecoder)
         let writeState = WriteState(preferHuffmanEncoding: preferHuffmanEncoding)

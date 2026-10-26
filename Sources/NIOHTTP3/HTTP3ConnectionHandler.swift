@@ -15,6 +15,7 @@
 internal import DequeModule
 @_spi(PackageInternal) public import HTTP3
 import HTTPTypes
+@_spi(PackageInternal) import QPACK
 public import Logging
 public import NIOCore
 public import NIOQUICHelpers
@@ -71,6 +72,7 @@ public final class HTTP3ConnectionHandler<StreamCreator: QUICStreamCreator & Sen
         type: HTTP3ConnectionType,
         preferHuffmanEncoding: Bool,
         maxBufferedDatagramBytes: Int,
+        inboundMemory: HTTP3InboundMemoryConfiguration?,
         logger: Logger,
         inboundStreamInitializer: H3InboundStreamInitializer,
         internalInboundStreamInitializer: (
@@ -95,6 +97,7 @@ public final class HTTP3ConnectionHandler<StreamCreator: QUICStreamCreator & Sen
             type: type,
             preferHuffmanEncoding: preferHuffmanEncoding,
             maxBufferedDatagramBytes: maxBufferedDatagramBytes,
+            inboundMemory: inboundMemory,
             logger: logger
         )
         self.type = type
@@ -216,6 +219,7 @@ public final class HTTP3ConnectionHandler<StreamCreator: QUICStreamCreator & Sen
             type: .server,
             preferHuffmanEncoding: configuration.preferHuffmanEncoding,
             maxBufferedDatagramBytes: configuration.maxBufferedDatagramBytes,
+            inboundMemory: configuration.inboundMemory,
             logger: logger,
             inboundStreamInitializer: inboundRequestStreamInitializer,
             internalInboundStreamInitializer: internalInboundStreamInitializer,
@@ -249,6 +253,7 @@ public final class HTTP3ConnectionHandler<StreamCreator: QUICStreamCreator & Sen
             type: .client,
             preferHuffmanEncoding: configuration.preferHuffmanEncoding,
             maxBufferedDatagramBytes: configuration.maxBufferedDatagramBytes,
+            inboundMemory: configuration.inboundMemory,
             logger: logger,
             inboundStreamInitializer: .closure(inboundPushStreamInitializer),
             internalInboundStreamInitializer: nil,
@@ -288,6 +293,7 @@ public final class HTTP3ConnectionHandler<StreamCreator: QUICStreamCreator & Sen
             type: .client,
             preferHuffmanEncoding: configuration.preferHuffmanEncoding,
             maxBufferedDatagramBytes: configuration.maxBufferedDatagramBytes,
+            inboundMemory: configuration.inboundMemory,
             logger: logger,
             inboundStreamInitializer: .closure(inboundPushStreamInitializer),
             internalInboundStreamInitializer: internalInboundStreamInitializer,
@@ -694,6 +700,9 @@ public struct HTTP3ServerConfiguration: Sendable {
     /// connection.
     public var maxBufferedDatagramBytes: Int = 64 * 1024
 
+    /// Opt-in encoded-input bounds and ownership reservation; nil preserves the default behavior.
+    public var inboundMemory: HTTP3InboundMemoryConfiguration?
+
     private init(rttProvider: @escaping (@Sendable () -> TimeAmount)) {
         self.rttProvider = rttProvider
     }
@@ -719,10 +728,66 @@ public struct HTTP3ClientConfiguration: Sendable {
     /// connection.
     public var maxBufferedDatagramBytes: Int = 64 * 1024
 
+    /// Opt-in encoded-input bounds and ownership reservation; nil preserves the default behavior.
+    public var inboundMemory: HTTP3InboundMemoryConfiguration?
+
     private init() {}
 
     /// The default configuration.
     public static var defaults: Self {
         Self()
+    }
+}
+
+/// The caller owns accounting; retain this object until all reserved native storage is released.
+@available(anyAppleOS 27, *)
+public protocol HTTP3InboundStorageReservation: AnyObject, Sendable {}
+
+/// Local parser limits, independent of the decoded field-section SETTINGS limit.
+@available(anyAppleOS 27, *)
+public struct HTTP3InboundMemoryConfiguration: Sendable {
+    public let maximumEncodedFieldSectionBytes: Int
+    public let maximumBytesPerRead: Int
+    public let makeStorageReservation: @Sendable (Int) throws -> any HTTP3InboundStorageReservation
+
+    public init(
+        maximumEncodedFieldSectionBytes: Int,
+        maximumBytesPerRead: Int,
+        makeStorageReservation: @escaping @Sendable (Int) throws -> any HTTP3InboundStorageReservation
+    ) {
+        precondition(maximumEncodedFieldSectionBytes > 0 && maximumBytesPerRead > 0)
+        precondition(maximumBytesPerRead <= Int.max - 16)
+        self.maximumEncodedFieldSectionBytes = maximumEncodedFieldSectionBytes
+        self.maximumBytesPerRead = maximumBytesPerRead
+        self.makeStorageReservation = makeStorageReservation
+    }
+
+    /// Models array/string storage; allocator padding and object headers are outside this payload model.
+    func requiredStorageBytes(maximumDecodedFieldSectionBytes: Int) -> Int {
+        precondition(maximumDecodedFieldSectionBytes >= 0)
+        let (inputSize, inputOverflow) = max(self.maximumEncodedFieldSectionBytes, 1024).addingReportingOverflow(self.maximumBytesPerRead)
+        let (framedSize, framingOverflow) = inputSize.addingReportingOverflow(16)
+        precondition(!inputOverflow && !framingOverflow)
+        var capacity = 1
+        while capacity < framedSize {
+            precondition(capacity <= Int.max / 2)
+            capacity *= 2
+        }
+        let fields = maximumDecodedFieldSectionBytes / 32
+        let stride = MemoryLayout<FieldLine>.stride + 2 * MemoryLayout<HTTPField>.stride
+        let terms = [capacity, capacity, self.maximumBytesPerRead]
+        var total = 0
+        for term in terms {
+            let (next, overflow) = total.addingReportingOverflow(term)
+            precondition(!overflow)
+            total = next
+        }
+        for (count, size) in [(fields, stride), (maximumDecodedFieldSectionBytes, 6)] {
+            let (bytes, productOverflow) = count.multipliedReportingOverflow(by: size)
+            let (next, sumOverflow) = total.addingReportingOverflow(bytes)
+            precondition(!productOverflow && !sumOverflow)
+            total = next
+        }
+        return total
     }
 }

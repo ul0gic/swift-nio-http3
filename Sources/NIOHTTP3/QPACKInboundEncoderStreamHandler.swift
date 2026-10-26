@@ -33,9 +33,27 @@ final class QPACKInboundEncoderStreamHandler<Delegate: QPACKInboundEncoderStream
 
     let decoder: NIOSingleStepByteToMessageProcessor<QPACKEncoderInstructionDecoder>
     let delegate: Delegate
+    private let inboundMemory: HTTP3InboundMemoryConfiguration?
+    private let storageReservation: (any HTTP3InboundStorageReservation)?
 
     init(delegate: consuming Delegate) {
         self.decoder = NIOSingleStepByteToMessageProcessor(QPACKEncoderInstructionDecoder())
+        self.delegate = delegate
+        self.inboundMemory = nil
+        self.storageReservation = nil
+    }
+
+    init(delegate: consuming Delegate, inboundMemory: HTTP3InboundMemoryConfiguration?) throws {
+        self.storageReservation = try inboundMemory.map { memory in
+            try memory.makeStorageReservation(memory.requiredStorageBytes(
+                maximumDecodedFieldSectionBytes: memory.maximumEncodedFieldSectionBytes
+            ))
+        }
+        self.inboundMemory = inboundMemory
+        self.decoder = NIOSingleStepByteToMessageProcessor(
+            QPACKEncoderInstructionDecoder(allowInsertions: inboundMemory == nil),
+            maximumBufferSize: inboundMemory.map { $0.maximumBytesPerRead + 16 }
+        )
         self.delegate = delegate
     }
 
@@ -54,6 +72,9 @@ final class QPACKInboundEncoderStreamHandler<Delegate: QPACKInboundEncoderStream
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let byteBuffer = Self.unwrapInboundIn(data)
         do {
+            if let inboundMemory, byteBuffer.capacity > inboundMemory.maximumBytesPerRead {
+                throw ByteToMessageDecoderError.PayloadTooLargeError()
+            }
             try self.decoder.process(buffer: byteBuffer) { instruction in
                 try self.delegate.onReceivedInstruction(instruction)
             }

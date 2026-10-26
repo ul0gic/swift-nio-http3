@@ -22,11 +22,12 @@ extension ByteBuffer {
     /// If a valid instruction can't be formed, returns nil and leaves the reader index as it was.
     /// - Returns: The instruction, or nil if it cannot be decoded.
     @available(anyAppleOS 27, *)
-    mutating func readQPACKEncoderInstruction() throws(IntegerReadingError) -> QPACKEncoderInstruction? {
+    mutating func readQPACKEncoderInstruction(allowInsertions: Bool = true) throws -> QPACKEncoderInstruction? {
         guard let firstByte = self.peekInteger(as: UInt8.self) else {
             return nil
         }
         if firstByte & 0x80 == 0x80 {
+            guard allowInsertions else { throw QPACKError.invalidEncoderInstruction }
             // First bit is 1. This is insertWithNameReference
             // The 2nd bit represents static table (1) or dynamic table (0)
             let table = QPACKReferenceTable.staticIfTrue(firstByte & 0x40 == 0x40)
@@ -48,6 +49,7 @@ extension ByteBuffer {
             self.moveReaderIndex(forwardBy: relativeIndex.bytesRead + value.bytesRead)
             return .insertWithNameReference(table, relativeIndex: relativeIndex.value, value: value.value)
         } else if firstByte & 0x40 == 0x40 {
+            guard allowInsertions else { throw QPACKError.invalidEncoderInstruction }
             // Second bit is 1, i.e we begin with a 01 pattern. This is insertWithLiteralName
             guard let name = try self.getQPACKEncodedString(at: self.readerIndex, withPrefix: 6) else {
                 return nil
@@ -65,6 +67,7 @@ extension ByteBuffer {
             }
             return .setDynamicTableCapacity(capacity)
         } else {
+            guard allowInsertions else { throw QPACKError.invalidEncoderInstruction }
             // First 3 bits are 000. This is duplicate
             guard let relativeIndex = try self.readQPACKPrefixedInteger(as: Int.self, withPrefix: 5) else {
                 return nil
@@ -194,19 +197,23 @@ public struct QPACKEncoderInstructionEncoder {
 @_spi(PackageInternal)
 @available(anyAppleOS 27, *)
 public struct QPACKEncoderInstructionDecoder {
-    @_spi(PackageInternal)
-    public init() {}
+    private let allowInsertions: Bool
 
     @_spi(PackageInternal)
-    public func decode(buffer: inout ByteBuffer) throws(IntegerReadingError) -> QPACKEncoderInstruction? {
-        try buffer.readQPACKEncoderInstruction()
+    public init(allowInsertions: Bool = true) {
+        self.allowInsertions = allowInsertions
+    }
+
+    @_spi(PackageInternal)
+    public func decode(buffer: inout ByteBuffer) throws -> QPACKEncoderInstruction? {
+        try buffer.readQPACKEncoderInstruction(allowInsertions: self.allowInsertions)
     }
 
     @_spi(PackageInternal)
     public func decodeLast(
         buffer: inout ByteBuffer,
         seenEOF: Bool
-    ) throws(IntegerReadingError) -> QPACKEncoderInstruction? {
+    ) throws -> QPACKEncoderInstruction? {
         try self.decode(buffer: &buffer)
     }
 }

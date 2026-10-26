@@ -65,7 +65,7 @@ struct HTTP3FrameDecoderStateMachine: ~Copyable {
 
             /// Reclaims already-read bytes from the buffer if `isWorthwhileToReclaimBytes()` returns `true`.
             private mutating func reclaimBytesIfWorthwhile() {
-                if self.isWorthwhileToReclaimBytes() {
+                if self.decoder.maximumEncodedFieldSectionBytes != nil || self.isWorthwhileToReclaimBytes() {
                     self.buffer.discardReadBytes()
                 }
             }
@@ -74,8 +74,18 @@ struct HTTP3FrameDecoderStateMachine: ~Copyable {
 
     private let state: State
 
-    init() {
-        self.init(state: .idle)
+    init(maximumEncodedFieldSectionBytes: Int? = nil, maximumDecodedFieldSectionBytes: Int? = nil) {
+        if let maximumEncodedFieldSectionBytes {
+            self.init(state: .decoding(.init(
+                buffer: ByteBuffer(),
+                decoder: HTTP3FrameDecoder(
+                    maximumEncodedFieldSectionBytes: maximumEncodedFieldSectionBytes,
+                    maximumDecodedFieldSectionBytes: maximumDecodedFieldSectionBytes
+                )
+            )))
+        } else {
+            self.init(state: .idle)
+        }
     }
 
     private init(state: consuming State) {

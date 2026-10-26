@@ -367,7 +367,8 @@ struct QPACKStateMachine<DecodeContext>: ~Copyable {
         let result = self.qpackDecoder.decodeFieldSection(
             prefix: prefix,
             lines: fieldSection.lines,
-            streamID: streamID
+            streamID: streamID,
+            maximumDecodedBytes: fieldSection.maximumDecodedBytes
         )
         switch result {
         case .success(let fields, let instruction):
@@ -418,7 +419,8 @@ struct QPACKStateMachine<DecodeContext>: ~Copyable {
         let qpackResult = self.qpackDecoder.decodeFieldSection(
             prefix: entry.prefix,
             lines: entry.lines,
-            streamID: entry.streamID
+            streamID: entry.streamID,
+            maximumDecodedBytes: entry.fieldSection.maximumDecodedBytes
         )
         switch qpackResult {
         case .missingInsertCount:

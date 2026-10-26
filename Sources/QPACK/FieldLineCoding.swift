@@ -174,6 +174,8 @@ public struct FieldSection: Sendable, Hashable {
     /// Each line of the field section. A line represents a header.
     @_spi(PackageInternal)
     public var lines: [FieldLine]
+    @_spi(PackageInternal)
+    public var maximumDecodedBytes: Int?
 
     @_spi(PackageInternal)
     public init(prefix: EncodedFieldSectionPrefix, lines: [FieldLine]) {
@@ -186,8 +188,8 @@ extension ByteBuffer {
     /// Read a single ``FieldLine`` from this `ByteBuffer`.
     /// - Returns: The instruction, or nil if it cannot be decoded.
     @available(anyAppleOS 27, *)
-    mutating func readFieldLine() throws(IntegerReadingError) -> FieldLine? {
-        guard let result = try self.getFieldLine(at: self.readerIndex) else { return nil }
+    mutating func readFieldLine(budget: QPACKFieldSectionBudget? = nil) throws(IntegerReadingError) -> FieldLine? {
+        guard let result = try self.getFieldLine(at: self.readerIndex, budget: budget) else { return nil }
         self.moveReaderIndex(forwardBy: result.bytesRead)
         return result.value
     }
@@ -196,7 +198,7 @@ extension ByteBuffer {
     /// Does not move the readerIndex.
     /// - Returns: The instruction, or nil if it cannot be decoded.
     @available(anyAppleOS 27, *)
-    private func getFieldLine(at startIndex: Int) throws(IntegerReadingError) -> Decoded<FieldLine>? {
+    private func getFieldLine(at startIndex: Int, budget: QPACKFieldSectionBudget?) throws(IntegerReadingError) -> Decoded<FieldLine>? {
         guard let firstByte = self.getInteger(at: startIndex, as: UInt8.self) else {
             return nil
         }
@@ -220,7 +222,7 @@ extension ByteBuffer {
             guard let index = try self.getQPACKPrefixedInteger(as: Int.self, at: startIndex, withPrefix: 4) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: startIndex + index.bytesRead, withPrefix: 8) else {
+            guard let value = try self.getQPACKEncodedString(at: startIndex + index.bytesRead, withPrefix: 8, budget: budget) else {
                 return nil
             }
             return .init(
@@ -236,10 +238,10 @@ extension ByteBuffer {
             // First 3 bits are 001. This is Literal Field Line with Literal Name
             // 4th bit is N, if set then the encoded field line MUST always be encoded with a literal representation
             let requireLiteralRepresentation = firstByte & 0x10 == 0x10
-            guard let name = try self.getQPACKEncodedString(at: startIndex, withPrefix: 4) else {
+            guard let name = try self.getQPACKEncodedString(at: startIndex, withPrefix: 4, budget: budget) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: startIndex + name.bytesRead, withPrefix: 8) else {
+            guard let value = try self.getQPACKEncodedString(at: startIndex + name.bytesRead, withPrefix: 8, budget: budget) else {
                 return nil
             }
             return .init(
@@ -266,7 +268,7 @@ extension ByteBuffer {
             guard let index = try self.getQPACKPrefixedInteger(as: Int.self, at: startIndex, withPrefix: 3) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: startIndex + index.bytesRead, withPrefix: 8) else {
+            guard let value = try self.getQPACKEncodedString(at: startIndex + index.bytesRead, withPrefix: 8, budget: budget) else {
                 return nil
             }
             return .init(
@@ -358,16 +360,20 @@ extension ByteBuffer {
 
     @available(anyAppleOS 27, *)
     @_spi(PackageInternal)
-    public mutating func readFieldSection() throws(IntegerReadingError) -> FieldSection? {
+    public mutating func readFieldSection(budget: QPACKFieldSectionBudget? = nil) throws(IntegerReadingError) -> FieldSection? {
         guard let prefix = try self.readFieldSectionPrefix() else {
             return nil
         }
         var lines = [FieldLine]()
-        lines.reserveCapacity(QPACKConstants.defaultFieldLinesCapacity)
-        while let l = try self.readFieldLine() {
-            lines.append(l)
+        lines.reserveCapacity(budget.map { $0.maximumBytes / 32 } ?? QPACKConstants.defaultFieldLinesCapacity)
+        while self.readableBytes > 0 {
+            guard budget?.consume(32) != false else { return nil }
+            guard let line = try self.readFieldLine(budget: budget) else { return nil }
+            lines.append(line)
         }
-        return FieldSection(prefix: prefix, lines: lines)
+        var section = FieldSection(prefix: prefix, lines: lines)
+        section.maximumDecodedBytes = budget?.maximumBytes
+        return section
     }
 }
 
@@ -484,5 +490,29 @@ extension UInt8 {
     /// - Returns: The mask.
     fileprivate static func maskForBit(bit: Int) -> Self {
         UInt8(truncatingIfNeeded: 1 &<< (8 - bit))
+    }
+}
+
+/// Confined to one synchronous field-section decode; charges RFC field overhead and literal bytes.
+@available(anyAppleOS 27, *)
+@_spi(PackageInternal)
+public final class QPACKFieldSectionBudget {
+    public let maximumBytes: Int
+    public private(set) var remainingBytes: Int
+    public var exceededLimit = false
+
+    public init(maximumBytes: Int) {
+        precondition(maximumBytes >= 0)
+        self.maximumBytes = maximumBytes
+        self.remainingBytes = maximumBytes
+    }
+
+    func consume(_ count: Int) -> Bool {
+        guard count <= self.remainingBytes else {
+            self.exceededLimit = true
+            return false
+        }
+        self.remainingBytes -= count
+        return true
     }
 }

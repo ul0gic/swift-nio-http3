@@ -67,6 +67,10 @@ final class HTTP3StreamHandler<Delegate: HTTP3StreamDelegate, ConnectionDelegate
     private var stateMachine: HTTP3StreamStateMachine
 
     private let logger: Logger
+    private let inboundMemory: HTTP3InboundMemoryConfiguration?
+    private let storageReservation: (any HTTP3InboundStorageReservation)?
+    private var bytesInReadBatch = 0
+    private var decodingReadBatch = false
 
     init(
         stateMachine: consuming HTTP3StreamStateMachine,
@@ -74,7 +78,9 @@ final class HTTP3StreamHandler<Delegate: HTTP3StreamDelegate, ConnectionDelegate
         streamType: HTTP3StreamType.Framed,
         qpackCoder: NIOQPACKCoder<ConnectionDelegate, Delegate>,
         delegate: Delegate,
-        logger: Logger
+        logger: Logger,
+        inboundMemory: HTTP3InboundMemoryConfiguration? = nil,
+        storageReservation: (any HTTP3InboundStorageReservation)? = nil
     ) {
         self.streamID = streamID
         self.streamType = streamType
@@ -82,6 +88,8 @@ final class HTTP3StreamHandler<Delegate: HTTP3StreamDelegate, ConnectionDelegate
         self.qpackCoder = qpackCoder
         self.delegate = delegate
         self.logger = logger
+        self.inboundMemory = inboundMemory
+        self.storageReservation = storageReservation
     }
 
     func handlerAdded(context: ChannelHandlerContext) {
@@ -177,10 +185,28 @@ final class HTTP3StreamHandler<Delegate: HTTP3StreamDelegate, ConnectionDelegate
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let bytes = self.unwrapInboundIn(data)
         self.logger.trace("HTTP3StreamHandler.channelRead", metadata: [LoggingKeys.bytes: "\(bytes.readableBytes)"])
+        if let inboundMemory {
+            guard bytes.capacity <= inboundMemory.maximumBytesPerRead,
+                bytes.readableBytes <= inboundMemory.maximumBytesPerRead - self.bytesInReadBatch else {
+                let error = HTTP3Error(
+                    code: .invalidFramePayload,
+                    message: "Inbound read batch exceeds configured storage reservation",
+                    cause: nil,
+                    errorCode: .excessiveLoad,
+                    location: .here()
+                )
+                self.delegate.onConnectionError(error)
+                return
+            }
+            self.bytesInReadBatch += bytes.readableBytes
+        }
         self.stateMachine.buffer(bytes)
     }
 
     func channelReadComplete(context: ChannelHandlerContext) {
+        guard !self.decodingReadBatch else { return }
+        self.decodingReadBatch = true
+        defer { self.decodingReadBatch = false }
         self.logger.trace("HTTP3StreamHandler.channelReadComplete")
         // In channelRead, we buffer bytes into the state machine.
         // Now it's time to try and read out as many full frames as possible.
@@ -229,8 +255,10 @@ final class HTTP3StreamHandler<Delegate: HTTP3StreamDelegate, ConnectionDelegate
                 self.delegate.onConnectionError(error)
             }
         }
-        // If we didn't read anything in this loop then we should also not fire the read complete
-        if didFireChannelRead {
+        self.bytesInReadBatch = 0
+        self.decodingReadBatch = false
+        // Bounded manual reads must observe completion even when a frame is incomplete.
+        if didFireChannelRead || self.inboundMemory != nil {
             context.fireChannelReadComplete()
         }
     }

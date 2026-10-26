@@ -48,7 +48,17 @@ public struct HTTP3FrameDecoder {
     private var nextStep: NextStep = .decodeFrameType
 
     @_spi(PackageInternal)
-    public init() {}
+    public init(
+        maximumEncodedFieldSectionBytes: Int? = nil,
+        maximumDecodedFieldSectionBytes: Int? = nil
+    ) {
+        if let maximumEncodedFieldSectionBytes { precondition(maximumEncodedFieldSectionBytes > 0) }
+        self.maximumEncodedFieldSectionBytes = maximumEncodedFieldSectionBytes
+        self.maximumDecodedFieldSectionBytes = maximumDecodedFieldSectionBytes
+    }
+
+    let maximumEncodedFieldSectionBytes: Int?
+    private let maximumDecodedFieldSectionBytes: Int?
 
     /// - Note: Any error thrown from here should be treated as a connection-level error.
     /// - Returns: A frame if one can be decoded from the available bytes, or `nil` if more bytes are needed.
@@ -185,7 +195,9 @@ public struct HTTP3FrameDecoder {
             }
         case .decodePayload(let type, let length):
             // Make sure the length is not excessive. If it is, drop the frame.
-            guard length <= type.maximumAcceptableLength else {
+            guard length <= type.maximumAcceptableLength,
+                !((type == .headers || type == .pushPromise)
+                    && length > UInt64(self.maximumEncodedFieldSectionBytes ?? Int.max)) else {
                 // RFC 9114 § 10.5: An endpoint MAY treat activity that is suspicious as a connection error of type H3_EXCESSIVE_LOAD,
                 // but false positives will result in disrupting valid connections and requests.
                 throw HTTP3Error(
@@ -206,7 +218,10 @@ public struct HTTP3FrameDecoder {
             }
             self.nextStep = .decodeFrameType
 
-            guard let frame = try payload.readHTTP3Frame(type: type) else {
+            guard let frame = try payload.readHTTP3Frame(
+                type: type,
+                maximumDecodedFieldSectionBytes: self.maximumDecodedFieldSectionBytes
+            ) else {
                 throw HTTP3Error(
                     code: .invalidFramePayload,
                     message: "Invalid frame payload",
@@ -246,12 +261,15 @@ extension ByteBuffer {
     /// - Returns: The frame, or nil if there aren't enough bytes.
     /// - Throws: If a frame is malformed in a specific way, e.g. a setting identifier is forbidden.
     @available(anyAppleOS 27, *)
-    fileprivate mutating func readHTTP3Frame(type: HTTP3FrameType) throws(HTTP3Error) -> HTTP3PartialFrameOrUnknown? {
+    fileprivate mutating func readHTTP3Frame(
+        type: HTTP3FrameType,
+        maximumDecodedFieldSectionBytes: Int? = nil
+    ) throws(HTTP3Error) -> HTTP3PartialFrameOrUnknown? {
         switch type {
         case .data:
             fatalError("Implementation error, this function should not be used to read a whole data frame.")
         case .headers:
-            guard let fieldSection = try self.readFieldSectionWithHTTP3Error() else {
+            guard let fieldSection = try self.readFieldSectionWithHTTP3Error(maximumDecodedBytes: maximumDecodedFieldSectionBytes) else {
                 return nil
             }
             return .known(.headers(.init(fieldSection: fieldSection)))
@@ -268,7 +286,7 @@ extension ByteBuffer {
             guard let pushID = self.readEncodedInteger(as: UInt64.self, strategy: .quic) else {
                 return nil
             }
-            guard let fieldSection = try self.readFieldSectionWithHTTP3Error() else {
+            guard let fieldSection = try self.readFieldSectionWithHTTP3Error(maximumDecodedBytes: maximumDecodedFieldSectionBytes) else {
                 return nil
             }
             return .known(.pushPromise(.init(pushID: .init(rawValue: pushID), fieldSection: fieldSection)))
@@ -291,9 +309,11 @@ extension ByteBuffer {
     }
 
     @available(anyAppleOS 27, *)
-    private mutating func readFieldSectionWithHTTP3Error() throws(HTTP3Error) -> FieldSection? {
+    private mutating func readFieldSectionWithHTTP3Error(maximumDecodedBytes: Int?) throws(HTTP3Error) -> FieldSection? {
+        let budget = maximumDecodedBytes.map { QPACKFieldSectionBudget(maximumBytes: $0) }
+        let result: FieldSection?
         do {
-            return try self.readFieldSection()
+            result = try self.readFieldSection(budget: budget)
         } catch {
             switch error {
             case .unrepresentable:
@@ -306,6 +326,16 @@ extension ByteBuffer {
                 )
             }
         }
+        if budget?.exceededLimit == true {
+            throw HTTP3Error(
+                code: .invalidFramePayload,
+                message: "Decoded field section exceeds configured limit",
+                cause: nil,
+                errorCode: .excessiveLoad,
+                location: .here()
+            )
+        }
+        return result
     }
 }
 

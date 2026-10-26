@@ -21,6 +21,7 @@ public enum QPACKDecoderError: Error, Sendable, Hashable {
     case invalidHeaderName
     case invalidReference
     case invalidFieldSection
+    case fieldSectionTooLarge
 }
 
 /// The result of decoding a field section, plus the instruction which need to be sent back, if any.
@@ -147,7 +148,8 @@ public struct QPACKDecoder {
     public mutating func decodeFieldSection(
         prefix: FieldSectionPrefix,
         lines: [FieldLine],
-        streamID: QUICStreamID
+        streamID: QUICStreamID,
+        maximumDecodedBytes: Int? = nil
     ) -> QPACKFullDecodeResult {
         guard prefix.requiredInsertCount <= self.dynamicTable.insertCount else {
             return .missingInsertCount
@@ -155,8 +157,13 @@ public struct QPACKDecoder {
         do {
             var fields = [HTTPField]()
             fields.reserveCapacity(lines.count)
+            var remaining = maximumDecodedBytes ?? Int.max
             for line in lines {
-                try fields.append(self.decodeLine(line, prefix: prefix))
+                let field = try self.decodeLine(line, prefix: prefix)
+                let cost = field.name.rawName.utf8.count + field.value.utf8.count + 32
+                guard cost <= remaining else { throw QPACKDecoderError.fieldSectionTooLarge }
+                remaining -= cost
+                fields.append(field)
             }
             self.stateSynchronizer.sectionProcessed(withRequiredInsertCount: prefix.requiredInsertCount)
             // 4.4.1 After processing an encoded field section whose declared Required Insert Count is not zero, the decoder emits a Section Acknowledgment instruction

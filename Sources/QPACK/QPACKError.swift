@@ -48,7 +48,7 @@ public enum QPACKError: Error, Sendable, Hashable {
     /// ones: the message is malformed, but the connection is not at fault.
     public var isConnectionError: Bool {
         switch self {
-        case .decodeError(.invalidHeaderName):
+        case .decodeError(.invalidHeaderName), .decodeError(.fieldSectionTooLarge):
             return false
         case .duplicateSettings,
             .invalidEncoderInstruction,

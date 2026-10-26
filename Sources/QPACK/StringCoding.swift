@@ -31,7 +31,8 @@ extension ByteBuffer {
     @available(anyAppleOS 27, *)
     func getQPACKEncodedString(
         at: Int,
-        withPrefix prefix: Int
+        withPrefix prefix: Int,
+        budget: QPACKFieldSectionBudget? = nil
     ) throws(IntegerReadingError) -> Decoded<String>? {
         /// RFC 9204 4.1.2: The prefix size, N, can have a value between 2 and 8, inclusive. The remainder of the string literal is unmodified.
         precondition(prefix >= 2)
@@ -55,14 +56,21 @@ extension ByteBuffer {
             guard
                 let string = self.getHuffmanEncodedString(
                     at: at + lengthInt.bytesRead,
-                    length: lengthInt.value
+                    length: lengthInt.value,
+                    budget: budget
                 )
             else { return nil }
+            guard budget?.consume(string.utf8.count) != false else { return nil }
             return Decoded<String>(value: string, bytesRead: lengthInt.bytesRead + lengthInt.value)
         } else {
+            if let budget, lengthInt.value > budget.remainingBytes {
+                budget.exceededLimit = true
+                return nil
+            }
             guard let string = self.getString(at: at + lengthInt.bytesRead, length: lengthInt.value) else {
                 return nil
             }
+            guard budget?.consume(string.utf8.count) != false else { return nil }
             return Decoded<String>(value: string, bytesRead: lengthInt.bytesRead + lengthInt.value)
         }
     }

@@ -100,7 +100,7 @@ extension ByteBuffer {
     /// - Returns: The decoded `String`, or nil if it can't be read.
     @discardableResult
     @available(anyAppleOS 27, *)
-    func getHuffmanEncodedString(at index: Int, length: Int) -> String? {
+    func getHuffmanEncodedString(at index: Int, length: Int, budget: QPACKFieldSectionBudget? = nil) -> String? {
         let start = index - self.readerIndex
         guard start >= 0, start <= self.readableBytes, length >= 0, length <= self.readableBytes - start
         else {
@@ -113,14 +113,14 @@ extension ByteBuffer {
             return ""
         }
 
-        let maxDecodedLength = Self.maxHuffmanDecodedLength(ofEncodedLength: length)
+        let maxDecodedLength = min(Self.maxHuffmanDecodedLength(ofEncodedLength: length), budget?.remainingBytes ?? Int.max)
 
         if maxDecodedLength <= Self.huffmanStackDecodeThreshold {
             // Decode into a stack buffer and then hand the exact byte count to `String`, so short
             // results can live inline in the `String` rather than forcing a heap allocation.
             return withUnsafeTemporaryAllocation(of: UInt8.self, capacity: maxDecodedLength) { scratch in
                 var output = OutputSpan(buffer: scratch, initializedCount: 0)
-                guard self._getHuffmanEncodedString(at: index, length: length, into: &output) else {
+                guard self._getHuffmanEncodedString(at: index, length: length, into: &output, budget: budget) else {
                     return nil
                 }
                 let count = output.finalize(for: scratch)
@@ -133,7 +133,7 @@ extension ByteBuffer {
         // beyond the inline-storage limit anyway, so the allocation was unavoidable.
         return try? String(unsafeUninitializedCapacity: maxDecodedLength) { backingStorage in
             var output = OutputSpan(buffer: backingStorage, initializedCount: 0)
-            guard self._getHuffmanEncodedString(at: index, length: length, into: &output) else {
+            guard self._getHuffmanEncodedString(at: index, length: length, into: &output, budget: budget) else {
                 throw HuffmanDecodeError.invalidState
             }
             return output.finalize(for: backingStorage)
@@ -153,9 +153,10 @@ extension ByteBuffer {
     private func _getHuffmanEncodedString(
         at index: Int,
         length: Int,
-        into destination: inout OutputSpan<UInt8>
+        into destination: inout OutputSpan<UInt8>,
+        budget: QPACKFieldSectionBudget?
     ) -> Bool {
-        assert(destination.freeCapacity >= Self.maxHuffmanDecodedLength(ofEncodedLength: length))
+        assert(budget != nil || destination.freeCapacity >= Self.maxHuffmanDecodedLength(ofEncodedLength: length))
 
         // The loop writes through an `UnsafeMutableRawBufferPointer` rather than calling
         // `destination.append(_:)`. `append` bounds-checks and bumps the span's count on every
@@ -181,6 +182,10 @@ extension ByteBuffer {
                     return false
                 }
                 if t.flags.contains(.symbol) {
+                    if initializedCount == buffer.count {
+                        budget?.exceededLimit = true
+                        return false
+                    }
                     buffer[initializedCount] = t.sym
                     initializedCount &+= 1
                 }
@@ -190,6 +195,10 @@ extension ByteBuffer {
                     return false
                 }
                 if t.flags.contains(.symbol) {
+                    if initializedCount == buffer.count {
+                        budget?.exceededLimit = true
+                        return false
+                    }
                     buffer[initializedCount] = t.sym
                     initializedCount &+= 1
                 }

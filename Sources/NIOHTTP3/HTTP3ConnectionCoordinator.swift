@@ -44,6 +44,8 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
     /// Instances of stream handlers which need to be pinged whenever a dynamic table entry is added.
     private var streamHandlers = [QUICStreamID: StreamHandler]()
     private var datagramBuffer: HTTP3DatagramBuffer
+    private let inboundMemory: HTTP3InboundMemoryConfiguration?
+    private let maximumDecodedFieldSectionBytes: Int?
 
     init(
         eventLoop: any EventLoop,
@@ -52,10 +54,13 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         type: HTTP3ConnectionType,
         preferHuffmanEncoding: Bool,
         maxBufferedDatagramBytes: Int,
+        inboundMemory: HTTP3InboundMemoryConfiguration? = nil,
         logger: Logger,
     ) {
         precondition(maxBufferedDatagramBytes >= 0)
         self.eventLoop = eventLoop
+        self.inboundMemory = inboundMemory
+        self.maximumDecodedFieldSectionBytes = localSettings.maximumFieldSectionSize.map { Int(clamping: $0) }
         self.outboundControlStreamHandler = .init(settings: localSettings)
         self.connectionStateMachine = .init(settings: localSettings, type: type)
         self.streamCreator = streamCreator
@@ -525,11 +530,12 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         case .addHandlers:
             let qpackCoder = self.forceUnwrapQPACKCoder(sourceLocation: .here())
             // qpack streams do not carry h3 frames
-            let forwarder = QPACKInboundEncoderStreamHandler(
+            let forwarder = try QPACKInboundEncoderStreamHandler(
                 delegate: QPACKInboundStreamDelegate(
                     qpackCoder: qpackCoder,
                     connection: self
-                )
+                ),
+                inboundMemory: self.inboundMemory
             )
             try streamChannel.pipeline.syncOperations.addHandler(forwarder)
             self.addStreamClosedCallback(
@@ -563,11 +569,12 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         case .addHandlers:
             let qpackCoder = self.forceUnwrapQPACKCoder(sourceLocation: .here())
             // qpack streams do not carry h3 frames
-            let forwarder = QPACKInboundDecoderStreamHandler(
+            let forwarder = try QPACKInboundDecoderStreamHandler(
                 delegate: QPACKInboundStreamDelegate(
                     qpackCoder: qpackCoder,
                     connection: self
-                )
+                ),
+                inboundMemory: self.inboundMemory
             )
             try streamChannel.pipeline.syncOperations.addHandler(forwarder)
             self.addStreamClosedCallback(
@@ -666,17 +673,28 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         var logger = self.logger
         logger[metadataKey: LoggingKeys.h3StreamType] = "\(streamType)"
         logger[metadataKey: LoggingKeys.quicStreamID] = "\(streamID)"
+        let reservation = try self.inboundMemory.map { memory in
+            try memory.makeStorageReservation(memory.requiredStorageBytes(
+                maximumDecodedFieldSectionBytes: self.maximumDecodedFieldSectionBytes ?? memory.maximumEncodedFieldSectionBytes
+            ))
+        }
         let streamHandler = StreamHandler(
             stateMachine: .init(
                 streamType: streamType,
                 incoming: incoming,
-                preferHuffmanEncoding: self.preferHuffmanEncoding
+                preferHuffmanEncoding: self.preferHuffmanEncoding,
+                maximumEncodedFieldSectionBytes: self.inboundMemory?.maximumEncodedFieldSectionBytes,
+                maximumDecodedFieldSectionBytes: self.inboundMemory.map {
+                    self.maximumDecodedFieldSectionBytes ?? $0.maximumEncodedFieldSectionBytes
+                }
             ),
             streamID: streamID,
             streamType: streamType,
             qpackCoder: self.forceUnwrapQPACKCoder(sourceLocation: .here()),
             delegate: self,
-            logger: logger
+            logger: logger,
+            inboundMemory: self.inboundMemory,
+            storageReservation: reservation
         )
         try streamChannel.pipeline.syncOperations.addHandler(streamHandler)
         self.streamHandlers[streamID] = streamHandler
