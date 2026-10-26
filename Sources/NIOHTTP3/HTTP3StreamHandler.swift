@@ -186,7 +186,7 @@ final class HTTP3StreamHandler<Delegate: HTTP3StreamDelegate, ConnectionDelegate
         let bytes = self.unwrapInboundIn(data)
         self.logger.trace("HTTP3StreamHandler.channelRead", metadata: [LoggingKeys.bytes: "\(bytes.readableBytes)"])
         if let inboundMemory {
-            guard bytes.capacity <= inboundMemory.maximumBytesPerRead,
+            guard bytes.capacity <= inboundMemory.maximumReadBufferCapacity,
                 bytes.readableBytes <= inboundMemory.maximumBytesPerRead - self.bytesInReadBatch else {
                 let error = HTTP3Error(
                     code: .invalidFramePayload,

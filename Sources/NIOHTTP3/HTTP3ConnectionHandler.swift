@@ -762,6 +762,14 @@ public struct HTTP3InboundMemoryConfiguration: Sendable {
         self.makeStorageReservation = makeStorageReservation
     }
 
+    // NIO rounds UInt32-backed capacities to a power of two, saturating at UInt32.max.
+    var maximumReadBufferCapacity: Int {
+        let requested = min(UInt64(self.maximumBytesPerRead), UInt64(UInt32.max))
+        var capacity: UInt64 = 1
+        while capacity < requested { capacity <<= 1 }
+        return Int(min(capacity, UInt64(UInt32.max)))
+    }
+
     /// Models array/string storage; allocator padding and object headers are outside this payload model.
     func requiredStorageBytes(
         maximumDecodedFieldSectionBytes: Int,
@@ -779,7 +787,7 @@ public struct HTTP3InboundMemoryConfiguration: Sendable {
         }
         let fields = maximumDecodedFieldSectionBytes / 32
         let stride = MemoryLayout<FieldLine>.stride + 2 * MemoryLayout<HTTPField>.stride
-        let terms = [capacity, capacity, self.maximumBytesPerRead]
+        let terms = [capacity, capacity, self.maximumReadBufferCapacity]
         var total = 0
         for term in terms {
             let (next, overflow) = total.addingReportingOverflow(term)
