@@ -73,7 +73,7 @@ final class QPACKInboundDecoderStreamHandler<Delegate: QPACKInboundDecoderStream
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         let byteBuffer = Self.unwrapInboundIn(data)
         do {
-            if let inboundMemory, byteBuffer.capacity > inboundMemory.maximumBytesPerRead {
+            if let inboundMemory, byteBuffer.capacity > inboundMemory.maximumReadBufferCapacity {
                 throw ByteToMessageDecoderError.PayloadTooLargeError()
             }
             try self.decoder.process(buffer: byteBuffer) { instruction in
