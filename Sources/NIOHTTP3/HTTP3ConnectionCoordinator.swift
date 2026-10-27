@@ -875,7 +875,7 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         case .emitConnectionError(let error):
             self.connection?.emitConnectionError(error)
         case .none:
-            assertionFailure("Tried to emit stream error when already finished.")
+            break
         }
     }
 
