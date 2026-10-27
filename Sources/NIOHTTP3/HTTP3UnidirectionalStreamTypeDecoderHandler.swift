@@ -97,10 +97,11 @@ final class HTTP3UnidirectionalStreamTypeDecoderHandler: ChannelInboundHandler, 
     /// Send the error code to the remote and close the stream.
     /// - Parameter errorCode: The error code to send to the remote peer.
     private func sendStreamReset(errorCode: HTTP3ErrorCode) {
-        guard let context = self.context else {
-            fatalError("Tried to send stream reset but missing context")
-        }
         self.state.abortReading()
+        guard let context = self.context else {
+            // Initialization failure may complete after the stream has already closed.
+            return
+        }
         context.triggerUserOutboundEvent(
             QUICStopSendingEvent(code: QUICApplicationErrorCode(errorCode)),
             promise: nil
