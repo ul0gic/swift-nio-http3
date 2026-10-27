@@ -63,7 +63,10 @@ public enum HTTP3MessageDecoding {
             throw Self.unparsableError(message: "Invalid headers", cause: error, location: .here())
         }
         if let te = request.headerFields[.te] {
-            if te != "trailers" {
+            var token = te.utf8[...]
+            while token.first == 0x20 || token.first == 0x09 { token.removeFirst() }
+            while token.last == 0x20 || token.last == 0x09 { token.removeLast() }
+            if !token.elementsEqual("trailers".utf8, by: { $0 == $1 || $0 == $1 - 0x20 }) {
                 throw Self.invalidHeadersError(
                     message: "te field must contain trailers if present",
                     location: .here()
