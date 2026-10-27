@@ -35,7 +35,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.3"),
         .package(url: "https://github.com/apple/swift-nio-extras.git", from: "1.22.0"),
         .package(url: "https://github.com/apple/swift-nio-quic-helpers.git", .upToNextMinor(from: "0.1.2")),
-        .package(url: "https://github.com/ul0gic/swift-nio-quic.git", revision: "e63aa26bbc710dc0c67bc953c57ccb656c621b9d"),
+        .package(url: "https://github.com/ul0gic/swift-nio-quic.git", revision: "fc6da19b2fc028cbba360d1c795a65bf1a8d2f50"),
     ],
     targets: [
         .target(
