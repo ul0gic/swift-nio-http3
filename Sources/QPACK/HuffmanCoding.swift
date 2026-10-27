@@ -88,56 +88,30 @@ extension ByteBuffer {
         (encodedLength * 8 + 4) / 5
     }
 
-    /// Decoded strings up to this many bytes long are decoded via a stack buffer, so that the
-    /// resulting `String` can pick its own (possibly inline, allocation-free) storage. Chosen to
-    /// cover every header name and all but the longest header values.
-    fileprivate static var huffmanStackDecodeThreshold: Int { 128 }
-
-    /// Decodes a huffman-encoded string from the `ByteBuffer`.
-    /// - Parameters:
-    ///   - index: The location of the encoded bytes to read.
-    ///   - length: The number of huffman-encoded octets to read.
-    /// - Returns: The decoded `String`, or nil if it can't be read.
-    @discardableResult
     @available(anyAppleOS 27, *)
     func getHuffmanEncodedString(at index: Int, length: Int, budget: QPACKFieldSectionBudget? = nil) -> String? {
+        guard let bytes = self.getHuffmanEncodedBytes(at: index, length: length, budget: budget) else { return nil }
+        return String(validating: bytes.bytes, as: UTF8.self)
+    }
+
+    @available(anyAppleOS 27, *)
+    func getHuffmanEncodedBytes(at index: Int, length: Int, budget: QPACKFieldSectionBudget? = nil) -> QPACKBytes? {
         let start = index - self.readerIndex
-        guard start >= 0, start <= self.readableBytes, length >= 0, length <= self.readableBytes - start
-        else {
-            assertionFailure(
-                "Requested range out of bounds: \(index) + \(length) vs. \(self.readerIndex)..<\(self.writerIndex)"
-            )
+        guard start >= 0, start <= self.readableBytes, length >= 0, length <= self.readableBytes - start else {
+            assertionFailure("Requested range out of bounds: \(index) + \(length) vs. \(self.readerIndex)..<\(self.writerIndex)")
             return nil
         }
-        if length == 0 {
-            return ""
+        if length == 0 { return "" }
+        let capacity = min(Self.maxHuffmanDecodedLength(ofEncodedLength: length), budget?.remainingBytes ?? Int.max)
+        var valid = false
+        let bytes = [UInt8](unsafeUninitializedCapacity: capacity) { storage, initializedCount in
+            var output = OutputSpan(buffer: storage, initializedCount: 0)
+            valid = self._getHuffmanEncodedString(at: index, length: length, into: &output, budget: budget)
+            initializedCount = output.finalize(for: storage)
         }
-
-        let maxDecodedLength = min(Self.maxHuffmanDecodedLength(ofEncodedLength: length), budget?.remainingBytes ?? Int.max)
-
-        if maxDecodedLength <= Self.huffmanStackDecodeThreshold {
-            // Decode into a stack buffer and then hand the exact byte count to `String`, so short
-            // results can live inline in the `String` rather than forcing a heap allocation.
-            return withUnsafeTemporaryAllocation(of: UInt8.self, capacity: maxDecodedLength) { scratch in
-                var output = OutputSpan(buffer: scratch, initializedCount: 0)
-                guard self._getHuffmanEncodedString(at: index, length: length, into: &output, budget: budget) else {
-                    return nil
-                }
-                let count = output.finalize(for: scratch)
-                return String(decoding: scratch[..<count], as: UTF8.self)
-            }
-        }
-
-        // For long values, decode straight into the `String`'s storage rather than paying for a
-        // scratch buffer plus a copy. This over-reserves by up to 1.6x, but such values are far
-        // beyond the inline-storage limit anyway, so the allocation was unavoidable.
-        return try? String(unsafeUninitializedCapacity: maxDecodedLength) { backingStorage in
-            var output = OutputSpan(buffer: backingStorage, initializedCount: 0)
-            guard self._getHuffmanEncodedString(at: index, length: length, into: &output, budget: budget) else {
-                throw HuffmanDecodeError.invalidState
-            }
-            return output.finalize(for: backingStorage)
-        }
+        guard valid else { return nil }
+        // Do not retain the Huffman worst-case capacity in the decoded field section.
+        return bytes.withUnsafeBufferPointer { QPACKBytes($0) }
     }
 
     /// Decode `length` Huffman-encoded octets starting at `index`, appending the decoded bytes to
@@ -212,7 +186,3 @@ extension ByteBuffer {
     }
 }
 
-private enum HuffmanDecodeError: Error {
-    /// The decoder entered an invalid state. Usually this means invalid input.
-    case invalidState
-}

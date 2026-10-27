@@ -43,12 +43,10 @@ public enum QPACKError: Error, Sendable, Hashable {
 
     /// Whether the failure is fatal to the connection, rather than only to the stream it happened on.
     ///
-    /// Everything which may leave the two dynamic tables out of sync is a connection error. The only stream error
-    /// is a field section which decoded fine, but whose field names are not valid in HTTP/3, such as upper case
-    /// ones: the message is malformed, but the connection is not at fault.
+    /// Compression-state failures are connection errors; malformed HTTP fields are stream errors.
     public var isConnectionError: Bool {
         switch self {
-        case .decodeError(.invalidHeaderName), .decodeError(.fieldSectionTooLarge):
+        case .decodeError(.invalidHeaderName), .decodeError(.invalidHeaderValue), .decodeError(.fieldSectionTooLarge):
             return false
         case .duplicateSettings,
             .invalidEncoderInstruction,

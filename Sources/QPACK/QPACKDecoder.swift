@@ -18,6 +18,7 @@ public import NIOQUICHelpers
 @available(anyAppleOS 27, *)
 @_spi(PackageInternal)
 public enum QPACKDecoderError: Error, Sendable, Hashable {
+    case invalidHeaderValue
     case invalidHeaderName
     case invalidReference
     case invalidFieldSection
@@ -84,7 +85,8 @@ public struct QPACKDecoder {
             try self.dynamicTable.setCurrentCapacity(capacity)
             return nil
         case .insertWithLiteralName(let name, let value):
-            guard let fieldName = HTTPField.Name(parsed: name) else {
+            guard let name = String(validating: name.bytes, as: UTF8.self),
+                let fieldName = HTTPField.Name(parsed: name) else {
                 throw QPACKDecoderError.invalidHeaderName
             }
             return try self.addDynamicTableEntry(named: fieldName, value: value)
@@ -114,7 +116,7 @@ public struct QPACKDecoder {
     /// Add an entry to the dynamic table and (maybe) return an insertCountIncrement.
     private mutating func addDynamicTableEntry(
         named name: HTTPField.Name,
-        value: String
+        value: QPACKBytes
     ) throws -> QPACKDecoderInstruction? {
         try self.dynamicTable.addHeader(named: name, value: value)
         let insertCount = self.dynamicTable.insertCount
@@ -159,9 +161,8 @@ public struct QPACKDecoder {
             fields.reserveCapacity(lines.count)
             var remaining = maximumDecodedBytes ?? Int.max
             for line in lines {
-                let field = try self.decodeLine(line, prefix: prefix)
-                let cost = field.name.rawName.utf8.count + field.value.utf8.count + 32
-                guard cost <= remaining else { throw QPACKDecoderError.fieldSectionTooLarge }
+                let field = try self.decodeLine(line, prefix: prefix, maximumDecodedBytes: remaining)
+                let cost = field.name.rawName.utf8.count + field.withUnsafeBytesOfValue({ $0.count }) + 32
                 remaining -= cost
                 fields.append(field)
             }
@@ -177,18 +178,33 @@ public struct QPACKDecoder {
         }
     }
 
-    private func decodeLine(_ line: FieldLine, prefix: FieldSectionPrefix) throws(QPACKDecoderError) -> HTTPField {
+    private static func makeField(
+        name: HTTPField.Name,
+        value: QPACKBytes,
+        maximumDecodedBytes: Int
+    ) throws(QPACKDecoderError) -> HTTPField {
+        let cost = name.rawName.utf8.count + value.count + 32
+        guard cost <= maximumDecodedBytes else { throw .fieldSectionTooLarge }
+        guard HTTPField.isValidValue(value.bytes) else { throw .invalidHeaderValue }
+        return HTTPField(name: name, value: value.bytes)
+    }
+
+    private func decodeLine(
+        _ line: FieldLine,
+        prefix: FieldSectionPrefix,
+        maximumDecodedBytes: Int
+    ) throws(QPACKDecoderError) -> HTTPField {
         switch line {
         case .indexed(let table, let index):
             let name: HTTPField.Name
-            let value: String
+            let value: QPACKBytes
             switch table {
             case .staticTable:
                 guard let entry = StaticHeaderTable.get(at: index) else {
                     throw QPACKDecoderError.invalidReference
                 }
                 name = entry.0
-                value = entry.1
+                value = QPACKBytes(utf8: entry.1)
             case .dynamicTable:
                 // In a field line representation, a relative index of 0 refers to the entry with absolute index equal to Base - 1
                 let absoluteIndex = prefix.base - 1 - index
@@ -198,12 +214,13 @@ public struct QPACKDecoder {
                 name = entry.name
                 value = entry.value
             }
-            return .init(name: name, value: value)
+            return try Self.makeField(name: name, value: value, maximumDecodedBytes: maximumDecodedBytes)
         case .literal(_, let name, let value):
-            guard let fieldName = HTTPField.Name(parsed: name) else {
+            guard let name = String(validating: name.bytes, as: UTF8.self),
+                let fieldName = HTTPField.Name(parsed: name) else {
                 throw QPACKDecoderError.invalidHeaderName
             }
-            return .init(name: fieldName, value: value)
+            return try Self.makeField(name: fieldName, value: value, maximumDecodedBytes: maximumDecodedBytes)
         case .literalWithNameReference(_, let table, let index, let value):
             let name: HTTPField.Name
             switch table {
@@ -220,7 +237,7 @@ public struct QPACKDecoder {
                 }
                 name = entry.name
             }
-            return .init(name: name, value: value)
+            return try Self.makeField(name: name, value: value, maximumDecodedBytes: maximumDecodedBytes)
         case .indexedWithPostBase(let index):
             // Post-Base indices are used in field line representations for entries with absolute indices greater
             // than or equal to Base, starting at 0 for the entry with absolute index equal to Base and increasing
@@ -229,13 +246,13 @@ public struct QPACKDecoder {
             guard let entry = self.dynamicTable.get(absoluteIndex: absoluteIndex) else {
                 throw QPACKDecoderError.invalidReference
             }
-            return .init(name: entry.name, value: entry.value)
+            return try Self.makeField(name: entry.name, value: entry.value, maximumDecodedBytes: maximumDecodedBytes)
         case .literalWithNameReferenceWithPostBase(_, let index, let value):
             let absoluteIndex = prefix.base + index
             guard let entry = self.dynamicTable.get(absoluteIndex: absoluteIndex) else {
                 throw QPACKDecoderError.invalidReference
             }
-            return .init(name: entry.name, value: value)
+            return try Self.makeField(name: entry.name, value: value, maximumDecodedBytes: maximumDecodedBytes)
         }
     }
 

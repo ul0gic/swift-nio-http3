@@ -93,8 +93,8 @@ extension HTTP3Error {
                 errorCode: .excessiveLoad,
                 location: location
             )
-        case .decodeError(.invalidHeaderName):
-            // The field section decoded fine, but a field name isn't valid in HTTP/3: a malformed message.
+        case .decodeError(.invalidHeaderName), .decodeError(.invalidHeaderValue):
+            // The field section decoded, but a field name or value makes the HTTP message malformed.
             self.init(
                 code: .qpackDecoderError,
                 message: "Could not decode QPACK headers",

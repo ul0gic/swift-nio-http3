@@ -39,7 +39,7 @@ extension ByteBuffer {
             }
             // Integers always end on a byte boundary
             guard
-                let value = try self.getQPACKEncodedString(
+                let value = try self.getQPACKEncodedBytes(
                     at: self.readerIndex + relativeIndex.bytesRead,
                     withPrefix: 8
                 )
@@ -51,10 +51,10 @@ extension ByteBuffer {
         } else if firstByte & 0x40 == 0x40 {
             guard allowInsertions else { throw QPACKError.invalidEncoderInstruction }
             // Second bit is 1, i.e we begin with a 01 pattern. This is insertWithLiteralName
-            guard let name = try self.getQPACKEncodedString(at: self.readerIndex, withPrefix: 6) else {
+            guard let name = try self.getQPACKEncodedBytes(at: self.readerIndex, withPrefix: 6) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: self.readerIndex + name.bytesRead, withPrefix: 8)
+            guard let value = try self.getQPACKEncodedBytes(at: self.readerIndex + name.bytesRead, withPrefix: 8)
             else {
                 return nil
             }

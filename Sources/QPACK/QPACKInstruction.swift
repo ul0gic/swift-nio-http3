@@ -36,9 +36,9 @@ public enum QPACKEncoderInstruction: Sendable, Hashable {
     /// 4.3.1. Set Dynamic Table Capacity.
     case setDynamicTableCapacity(Int)
     /// 4.3.2. Insert with Name Reference.
-    case insertWithNameReference(QPACKReferenceTable, relativeIndex: Int, value: String)
+    case insertWithNameReference(QPACKReferenceTable, relativeIndex: Int, value: QPACKBytes)
     /// 4.3.3. Insert with Literal Name.
-    case insertWithLiteralName(name: String, value: String)
+    case insertWithLiteralName(name: QPACKBytes, value: QPACKBytes)
     /// 4.3.4. Duplicate.
     case duplicateEntry(relativeIndex: Int)
 }

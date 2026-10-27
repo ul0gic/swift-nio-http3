@@ -123,11 +123,11 @@ public struct QPACKEncodeResult: Sendable, Hashable {
 /// A bit like ``FieldLine`` but without caring about wire representation.
 @available(anyAppleOS 27, *)
 private enum HeaderRepresentation {
-    case literal(requireLiteralRepresentation: Bool, name: HTTPField.Name, value: String)
+    case literal(requireLiteralRepresentation: Bool, name: HTTPField.Name, value: QPACKBytes)
     case staticTableReference(index: Int)
-    case staticTableNameReference(requireLiteralRepresentation: Bool, index: Int, value: String)
+    case staticTableNameReference(requireLiteralRepresentation: Bool, index: Int, value: QPACKBytes)
     case dynamicTableReference(absoluteIndex: Int)
-    case dynamicTableNameReference(requireLiteralRepresentation: Bool, absoluteIndex: Int, value: String)
+    case dynamicTableNameReference(requireLiteralRepresentation: Bool, absoluteIndex: Int, value: QPACKBytes)
 
     var requiredIndex: Int? {
         switch self {
@@ -142,7 +142,7 @@ private enum HeaderRepresentation {
         case .literal(let requireLiteralRepresentation, let name, let value):
             return .literal(
                 requireLiteralRepresentation: requireLiteralRepresentation,
-                name: name.canonicalName,
+                name: QPACKBytes(utf8: name.canonicalName),
                 value: value
             )
         case .staticTableReference(let index):
@@ -323,7 +323,8 @@ public struct DynamicQPACKEncoder {
         maxBlockedStreams: Int
     ) -> QPACKEncodeSingleResult {
         let requireLiteralRepresentation = false
-        let staticTableEntry = StaticHeaderTable.find(name: header.name, value: header.value)
+        let value = QPACKBytes(field: header)
+        let staticTableEntry = StaticHeaderTable.find(name: header.name, value: value)
         if let staticTableEntry, staticTableEntry.containsValue {
             // Exact match in static table
             return .init(headerRepresentation: .staticTableReference(index: staticTableEntry.index), instruction: nil)
@@ -334,7 +335,7 @@ public struct DynamicQPACKEncoder {
         )
         let avoidBlocking = potentiallyBlockedStreams >= maxBlockedStreams
 
-        let dynamicTableEntry = self.table.findExistingHeader(named: header.name, value: header.value)
+        let dynamicTableEntry = self.table.findExistingHeader(named: header.name, value: value)
 
         if let dynamicTableEntry, dynamicTableEntry.containsValue {
             // Exact match in dynamic table
@@ -345,7 +346,7 @@ public struct DynamicQPACKEncoder {
                     do {
                         let duplicatedAbsoluteIndex = try self.table.addHeader(
                             named: header.name,
-                            value: header.value
+                            value: value
                         )
                         self.table.addReference(duplicatedAbsoluteIndex)
                         return .init(
@@ -380,20 +381,20 @@ public struct DynamicQPACKEncoder {
                     headerRepresentation: .staticTableNameReference(
                         requireLiteralRepresentation: requireLiteralRepresentation,
                         index: staticTableEntry.index,
-                        value: header.value
+                        value: value
                     ),
                     instruction: nil
                 )
             }
             // If we're allowed to block then try adding the match to the dynamic table then return that reference
             do {
-                let absoluteIndex = try self.table.addHeader(named: header.name, value: header.value)
+                let absoluteIndex = try self.table.addHeader(named: header.name, value: value)
                 let instruction =
                     QPACKEncoderInstruction
                     .insertWithNameReference(
                         .staticTable,
                         relativeIndex: staticTableEntry.index,
-                        value: header.value
+                        value: value
                     )
                 self.table.addReference(absoluteIndex)
                 return .init(
@@ -408,7 +409,7 @@ public struct DynamicQPACKEncoder {
                         headerRepresentation: .staticTableNameReference(
                             requireLiteralRepresentation: requireLiteralRepresentation,
                             index: staticTableEntry.index,
-                            value: header.value
+                            value: value
                         ),
                         instruction: nil
                     )
@@ -424,7 +425,7 @@ public struct DynamicQPACKEncoder {
                 headerRepresentation: .dynamicTableNameReference(
                     requireLiteralRepresentation: requireLiteralRepresentation,
                     absoluteIndex: dynamicTableEntry.absoluteIndex,
-                    value: header.value
+                    value: value
                 ),
                 instruction: nil
             )
@@ -435,17 +436,17 @@ public struct DynamicQPACKEncoder {
                     headerRepresentation: .literal(
                         requireLiteralRepresentation: false,
                         name: header.name,
-                        value: header.value
+                        value: value
                     ),
                     instruction: nil
                 )
             }
             do {
-                let absoluteIndex = try self.table.addHeader(named: header.name, value: header.value)
+                let absoluteIndex = try self.table.addHeader(named: header.name, value: value)
                 self.table.addReference(absoluteIndex)
                 return .init(
                     headerRepresentation: .dynamicTableReference(absoluteIndex: absoluteIndex),
-                    instruction: .insertWithLiteralName(name: header.name.canonicalName, value: header.value)
+                    instruction: .insertWithLiteralName(name: QPACKBytes(utf8: header.name.canonicalName), value: value)
                 )
             } catch {
                 switch error {
@@ -455,7 +456,7 @@ public struct DynamicQPACKEncoder {
                         headerRepresentation: .literal(
                             requireLiteralRepresentation: false,
                             name: header.name,
-                            value: header.value
+                            value: value
                         ),
                         instruction: nil
                     )
@@ -557,7 +558,8 @@ public struct StaticQPACKEncoder {
         _ header: HTTPField,
         requireLiteralRepresentation: Bool
     ) -> HeaderRepresentation {
-        let staticTableEntry = StaticHeaderTable.find(name: header.name, value: header.value)
+        let value = QPACKBytes(field: header)
+        let staticTableEntry = StaticHeaderTable.find(name: header.name, value: value)
         if let staticTableEntry, staticTableEntry.containsValue {
             // Exact match in static table
             return .staticTableReference(index: staticTableEntry.index)
@@ -566,14 +568,14 @@ public struct StaticQPACKEncoder {
             return .staticTableNameReference(
                 requireLiteralRepresentation: requireLiteralRepresentation,
                 index: staticTableEntry.index,
-                value: header.value
+                value: value
             )
         } else {
             // We already checked static table, and there's no dynamic table, so it's a literal
             return .literal(
                 requireLiteralRepresentation: requireLiteralRepresentation,
                 name: header.name,
-                value: header.value
+                value: value
             )
         }
     }

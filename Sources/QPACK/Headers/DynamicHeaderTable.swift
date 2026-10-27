@@ -154,7 +154,7 @@ struct DynamicHeaderTable: Sendable {
     ///            if no matching header name could be located.
     func findExistingHeader(
         named name: HTTPField.Name,
-        value: String?
+        value: QPACKBytes?
     ) -> DynamicTableLookupResult? {
         // looking for both name and value, but can settle for just name if no value
         // has been provided. Return the first matching name (lowest index) in that case.
@@ -206,7 +206,7 @@ struct DynamicHeaderTable: Sendable {
     /// - Throws: If the header cannot fit in the storage.
     /// - Returns: The absolute index of the added header.
     @discardableResult
-    mutating func addHeader(named name: HTTPField.Name, value: String) throws(HeaderTableError) -> Int {
+    mutating func addHeader(named name: HTTPField.Name, value: QPACKBytes) throws(HeaderTableError) -> Int {
         try self.storage.add(
             name: name,
             value: value,

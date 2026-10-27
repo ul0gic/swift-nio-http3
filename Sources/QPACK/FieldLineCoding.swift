@@ -156,12 +156,12 @@ public enum FieldLine: Sendable, Hashable {
         requireLiteralRepresentation: Bool,
         table: QPACKReferenceTable,
         index: Int,
-        value: String
+        value: QPACKBytes
     )
     /// 4.5.5. Literal Field Line with Post-Base Name Reference.
-    case literalWithNameReferenceWithPostBase(requireLiteralRepresentation: Bool, index: Int, value: String)
+    case literalWithNameReferenceWithPostBase(requireLiteralRepresentation: Bool, index: Int, value: QPACKBytes)
     /// 4.5.6. Literal Field Line with Literal Name.
-    case literal(requireLiteralRepresentation: Bool, name: String, value: String)
+    case literal(requireLiteralRepresentation: Bool, name: QPACKBytes, value: QPACKBytes)
 }
 
 /// Represents a full field section as per RFC 9204 § 4.5.
@@ -222,7 +222,7 @@ extension ByteBuffer {
             guard let index = try self.getQPACKPrefixedInteger(as: Int.self, at: startIndex, withPrefix: 4) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: startIndex + index.bytesRead, withPrefix: 8, budget: budget) else {
+            guard let value = try self.getQPACKEncodedBytes(at: startIndex + index.bytesRead, withPrefix: 8, budget: budget) else {
                 return nil
             }
             return .init(
@@ -238,10 +238,10 @@ extension ByteBuffer {
             // First 3 bits are 001. This is Literal Field Line with Literal Name
             // 4th bit is N, if set then the encoded field line MUST always be encoded with a literal representation
             let requireLiteralRepresentation = firstByte & 0x10 == 0x10
-            guard let name = try self.getQPACKEncodedString(at: startIndex, withPrefix: 4, budget: budget) else {
+            guard let name = try self.getQPACKEncodedBytes(at: startIndex, withPrefix: 4, budget: budget) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: startIndex + name.bytesRead, withPrefix: 8, budget: budget) else {
+            guard let value = try self.getQPACKEncodedBytes(at: startIndex + name.bytesRead, withPrefix: 8, budget: budget) else {
                 return nil
             }
             return .init(
@@ -268,7 +268,7 @@ extension ByteBuffer {
             guard let index = try self.getQPACKPrefixedInteger(as: Int.self, at: startIndex, withPrefix: 3) else {
                 return nil
             }
-            guard let value = try self.getQPACKEncodedString(at: startIndex + index.bytesRead, withPrefix: 8, budget: budget) else {
+            guard let value = try self.getQPACKEncodedBytes(at: startIndex + index.bytesRead, withPrefix: 8, budget: budget) else {
                 return nil
             }
             return .init(
@@ -435,12 +435,12 @@ extension OutputRawSpan {
     /// Appends a string literal, encoded as in RFC 9204 § 4.1.2.
     @available(anyAppleOS 27, *)
     private mutating func appendQPACKEncodedString(
-        _ string: String,
+        _ string: QPACKBytes,
         preferHuffmanEncoding: Bool,
         prefix: Int,
         prefixBits: UInt8 = 0
     ) {
-        string.withContiguousUTF8 {
+        string.withBytes {
             self.appendQPACKEncodedString(
                 $0,
                 preferHuffmanEncoding: preferHuffmanEncoding,
@@ -461,12 +461,12 @@ extension QPACKEncodedLength {
         case .indexedWithPostBase(let index):
             Self.prefixedInteger(index, prefix: 4)
         case .literalWithNameReference(_, _, let index, let value):
-            Self.prefixedInteger(index, prefix: 4) &+ Self.maxString(byteCount: value.utf8.count, prefix: 8)
+            Self.prefixedInteger(index, prefix: 4) &+ Self.maxString(byteCount: value.count, prefix: 8)
         case .literalWithNameReferenceWithPostBase(_, let index, let value):
-            Self.prefixedInteger(index, prefix: 3) &+ Self.maxString(byteCount: value.utf8.count, prefix: 8)
+            Self.prefixedInteger(index, prefix: 3) &+ Self.maxString(byteCount: value.count, prefix: 8)
         case .literal(_, let name, let value):
-            Self.maxString(byteCount: name.utf8.count, prefix: 4)
-                &+ Self.maxString(byteCount: value.utf8.count, prefix: 8)
+            Self.maxString(byteCount: name.count, prefix: 4)
+                &+ Self.maxString(byteCount: value.count, prefix: 8)
         }
     }
 

@@ -16,27 +16,13 @@ import DequeModule
 import HTTPTypes
 
 struct HeaderTableEntry: Sendable, Hashable {
-    /// The actual field (name and value).
-    private var field: HTTPField
-    /// The absolute index, which is fixed for the lifetime of the entry as per RFC 9204 § 3.2.4.
+    let name: HTTPField.Name
+    let value: QPACKBytes
     var absoluteIndex: Int
-    /// The name of the field.
-    var name: HTTPField.Name {
-        self.field.name
-    }
 
-    /// The value of the field.
-    var value: String {
-        self.field.value
-    }
-
-    fileprivate init(name: HTTPField.Name, value: String, absoluteIndex: Int) {
-        let field = HTTPField(name: name, value: value)
-        self.init(field: field, absoluteIndex: absoluteIndex)
-    }
-
-    fileprivate init(field: HTTPField, absoluteIndex: Int) {
-        self.field = field
+    fileprivate init(name: HTTPField.Name, value: QPACKBytes, absoluteIndex: Int) {
+        self.name = name
+        self.value = value
         self.absoluteIndex = absoluteIndex
     }
 
@@ -45,7 +31,7 @@ struct HeaderTableEntry: Sendable, Hashable {
     /// The size of an entry is the sum of its name's length in bytes, its value's length in bytes, and 32 additional bytes.
     /// The size of an entry is calculated using the length of its name and value without Huffman encoding applied.
     var length: Int {
-        self.name.rawName.utf8.count + self.value.utf8.count + 32
+        self.name.rawName.utf8.count + self.value.count + 32
     }
 }
 
@@ -94,7 +80,7 @@ struct HeaderTableStorage: Sendable {
         case none
     }
 
-    func closestMatch(name: HTTPField.Name, value: String) -> MatchType {
+    func closestMatch(name: HTTPField.Name, value: QPACKBytes) -> MatchType {
         var partialIndex: Int?
         var lengthBeforePartial = 0
 
@@ -169,7 +155,7 @@ struct HeaderTableStorage: Sendable {
 
     mutating func add(
         name: HTTPField.Name,
-        value: String,
+        value: QPACKBytes,
         maximumEvictableAbsoluteIndex: Int?
     ) throws(HeaderTableError) -> HeaderTableEntry {
         // This can't overflow unless we have more than Int.max items.
@@ -257,7 +243,7 @@ struct HeaderTableStorage: Sendable {
 extension HeaderTableStorage: CustomStringConvertible {
     @usableFromInline
     var description: String {
-        let array: [(String, String)] = self.headers.map { header in
+        let array: [(String, QPACKBytes)] = self.headers.map { header in
             (header.name.canonicalName, header.value)
         }
         return array.description

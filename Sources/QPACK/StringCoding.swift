@@ -27,13 +27,40 @@ extension ByteBuffer {
         return result.value
     }
 
-    /// Get one QPACK encoded string from this ByteBuffer without moving the reader index.
     @available(anyAppleOS 27, *)
     func getQPACKEncodedString(
         at: Int,
         withPrefix prefix: Int,
         budget: QPACKFieldSectionBudget? = nil
     ) throws(IntegerReadingError) -> Decoded<String>? {
+        guard let decoded = try self.getQPACKEncodedBytes(at: at, withPrefix: prefix, budget: budget),
+            let text = String(validating: decoded.value.bytes, as: UTF8.self) else { return nil }
+        return Decoded(value: text, bytesRead: decoded.bytesRead)
+    }
+
+    @available(anyAppleOS 27, *)
+    @discardableResult
+    mutating func writeQPACKEncodedString(
+        _ string: String,
+        preferHuffmanEncoding: Bool,
+        prefix: Int,
+        prefixBits: UInt8 = 0
+    ) -> Int {
+        self.writeQPACKEncodedString(
+            QPACKBytes(utf8: string),
+            preferHuffmanEncoding: preferHuffmanEncoding,
+            prefix: prefix,
+            prefixBits: prefixBits
+        )
+    }
+
+    /// Get one QPACK encoded string from this ByteBuffer without moving the reader index.
+    @available(anyAppleOS 27, *)
+    func getQPACKEncodedBytes(
+        at: Int,
+        withPrefix prefix: Int,
+        budget: QPACKFieldSectionBudget? = nil
+    ) throws(IntegerReadingError) -> Decoded<QPACKBytes>? {
         /// RFC 9204 4.1.2: The prefix size, N, can have a value between 2 and 8, inclusive. The remainder of the string literal is unmodified.
         precondition(prefix >= 2)
         precondition(prefix <= 8)
@@ -54,24 +81,24 @@ extension ByteBuffer {
 
         if huffmanEncoded {
             guard
-                let string = self.getHuffmanEncodedString(
+                let string = self.getHuffmanEncodedBytes(
                     at: at + lengthInt.bytesRead,
                     length: lengthInt.value,
                     budget: budget
                 )
             else { return nil }
-            guard budget?.consume(string.utf8.count) != false else { return nil }
-            return Decoded<String>(value: string, bytesRead: lengthInt.bytesRead + lengthInt.value)
+            guard budget?.consume(string.count) != false else { return nil }
+            return Decoded<QPACKBytes>(value: string, bytesRead: lengthInt.bytesRead + lengthInt.value)
         } else {
             if let budget, lengthInt.value > budget.remainingBytes {
                 budget.exceededLimit = true
                 return nil
             }
-            guard let string = self.getString(at: at + lengthInt.bytesRead, length: lengthInt.value) else {
+            guard let bytes = self.getBytes(at: at + lengthInt.bytesRead, length: lengthInt.value) else {
                 return nil
             }
-            guard budget?.consume(string.utf8.count) != false else { return nil }
-            return Decoded<String>(value: string, bytesRead: lengthInt.bytesRead + lengthInt.value)
+            guard budget?.consume(bytes.count) != false else { return nil }
+            return Decoded<QPACKBytes>(value: QPACKBytes(bytes), bytesRead: lengthInt.bytesRead + lengthInt.value)
         }
     }
 
@@ -84,16 +111,16 @@ extension ByteBuffer {
     @available(anyAppleOS 27, *)
     @discardableResult
     mutating func writeQPACKEncodedString(
-        _ string: String,
+        _ string: QPACKBytes,
         preferHuffmanEncoding: Bool,
         prefix: Int,
         prefixBits: UInt8 = 0
     ) -> Int {
         let start = self.writerIndex
         self.writeWithOutputRawSpan(
-            minimumWritableBytes: QPACKEncodedLength.maxString(byteCount: string.utf8.count, prefix: prefix)
+            minimumWritableBytes: QPACKEncodedLength.maxString(byteCount: string.count, prefix: prefix)
         ) { output in
-            string.withContiguousUTF8 {
+            string.withBytes {
                 output.appendQPACKEncodedString(
                     $0,
                     preferHuffmanEncoding: preferHuffmanEncoding,

@@ -149,17 +149,17 @@ enum StaticHeaderTable {
     /// - Returns: A tuple containing the matching index and, if a value was specified as a
     ///            parameter, an indication whether that value was also found. Returns `nil`
     ///            if no matching header name could be located.
-    static func find(name: HTTPField.Name, value: String?) -> (index: Int, containsValue: Bool)? {
+    static func find(name: HTTPField.Name, value: QPACKBytes?) -> (index: Int, containsValue: Bool)? {
         let group = Self.entryGroup(for: name)
         guard !group.isEmpty else {
             return nil
         }
 
         if let value {
-            for index in group.first where Self.raw[index].value == value {
+            for index in group.first where Self.raw[index].value.utf8.elementsEqual(value.bytes) {
                 return (index: index, containsValue: true)
             }
-            for index in group.second where Self.raw[index].value == value {
+            for index in group.second where Self.raw[index].value.utf8.elementsEqual(value.bytes) {
                 return (index: index, containsValue: true)
             }
         }
