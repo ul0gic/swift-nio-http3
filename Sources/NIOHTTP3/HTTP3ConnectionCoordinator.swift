@@ -32,6 +32,7 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
     let eventLoop: any EventLoop
     private var qpackCoder: QPACKCoder?
     private var connectionStateMachine: HTTP3ConnectionStateMachine
+    private var immediateShutdownRequested = false
     private let outboundControlStreamHandler: HTTP3OutboundControlStreamHandler
     private let streamCreator: QUICStreamCreator
     /// The connection handler.
@@ -638,11 +639,16 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
             }
 
             self.connection?.fireReceivedSettingsEvent(receivedSettings)
-        case .cancelStreams(let ids):
-            self.cancelStreamsDueToReceivingGoaway(ids)
-        case .closeConnection:
-            self.logger.trace("GOAWAY with stream id \(streamID) resulting in immediate connection closure")
-            self.shutdownConnectionImmediately()
+        case .receivedGoaway(let id, let effect):
+            self.connection?.fireReceivedGoawayEvent(ReceivedGoawayEvent(id: id))
+            switch effect {
+            case .none:
+                break
+            case .cancelStreams(let ids):
+                self.cancelStreamsDueToReceivingGoaway(ids)
+            case .closeConnection:
+                self.shutdownConnectionImmediately()
+            }
         }
     }
 
@@ -743,6 +749,8 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
     /// Immediately close down the connection and emit NO\_ERROR as the reason.
     func shutdownConnectionImmediately() {
         self.eventLoop.preconditionInEventLoop()
+        guard !self.immediateShutdownRequested else { return }
+        self.immediateShutdownRequested = true
         self.logger.trace("Immediately closing connection")
         let action = self.connectionStateMachine.shutdownConnectionImmediately()
         switch action {
@@ -780,7 +788,7 @@ final class HTTP3ConnectionCoordinator<QUICStreamCreator: NIOQUICHelpers.QUICStr
         // Tell each handler that we got cancelled
         for id in ids {
             guard let handler = self.streamHandlers[id] else {
-                assertionFailure("Stream \(id) cancelled but we didn't have a handler")
+                // A GOAWAY observer may have synchronously closed this stream.
                 continue
             }
             handler.cancelStreamDueToReceivedGoaway()

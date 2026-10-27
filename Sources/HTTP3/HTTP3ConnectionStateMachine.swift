@@ -779,10 +779,14 @@ public struct HTTP3ConnectionStateMachine: ~Copyable {
         case onSettings(OnSettings)
         /// A connection error should be emitted
         case emitConnectionError(HTTP3Error)
-        /// The following streams should be cancelled (we got a GOAWAY)
-        case cancelStreams(ids: [QUICStreamID])
-        /// The connection should be immediately closed without an error.
-        case closeConnection
+        case receivedGoaway(id: HTTP3GoawayID, effect: GoawayEffect)
+
+        @_spi(PackageInternal)
+        public enum GoawayEffect {
+            case none
+            case cancelStreams(ids: [QUICStreamID])
+            case closeConnection
+        }
 
         @_spi(PackageInternal)
         public struct OnSettings: Hashable, Sendable {
@@ -883,14 +887,14 @@ public struct HTTP3ConnectionStateMachine: ~Copyable {
                     if idsToCancel.isEmpty {
                         if hasOpenRequestStreams {
                             // Can't close because we have requests in flight. We'll check again on stream close.
-                            return .none
+                            return .receivedGoaway(id: newRemoteGoawayID, effect: .none)
                         } else {
                             // We are a client, we were told to go away, and nothing is in flight
-                            return .closeConnection
+                            return .receivedGoaway(id: newRemoteGoawayID, effect: .closeConnection)
                         }
                     } else {
                         // There is stuff to be cancelled
-                        return .cancelStreams(ids: idsToCancel)
+                        return .receivedGoaway(id: newRemoteGoawayID, effect: .cancelStreams(ids: idsToCancel))
                     }
                 case .emitConnectionError(let error):
                     self = .init(state: .finished)
@@ -898,7 +902,7 @@ public struct HTTP3ConnectionStateMachine: ~Copyable {
                 case .none:
                     // Keep state as it was
                     self = .init(state: .initialized(initializedState))
-                    return .none
+                    return .receivedGoaway(id: newRemoteGoawayID, effect: .none)
                 }
             case .notStarted:
                 fatalError("Received control frame before connection initialized")

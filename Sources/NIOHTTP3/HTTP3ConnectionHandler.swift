@@ -651,6 +651,10 @@ extension HTTP3ConnectionHandler {
         context.fireChannelReadComplete()
     }
 
+    func fireReceivedGoawayEvent(_ event: ReceivedGoawayEvent) {
+        self.context?.fireUserInboundEventTriggered(event)
+    }
+
     func fireReceivedSettingsEvent(_ event: ReceivedSettings) {
         self.context?.fireUserInboundEventTriggered(event)
     }
